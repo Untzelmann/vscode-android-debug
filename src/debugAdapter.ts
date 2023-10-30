@@ -5,6 +5,8 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import * as extensionDependencies from './extensionDependencies';
 import * as android from './android';
 import { Device } from './commonTypes';
+import { highlightLogCat, printLogCat } from './extension';
+import Logcat from 'appium-adb/lib/logcat';
 
 export class DebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory  {
     private context: vscode.ExtensionContext;
@@ -21,6 +23,7 @@ class DebugAdapter extends debugadapter.LoggingDebugSession {
     private session: vscode.DebugSession;
     private childSessions: {[key: string]: vscode.DebugSession} = {};
     private jdwpCleanup: (() => Promise<void>)|undefined;
+    private logCat: Logcat|null = null;
 
     constructor(context: vscode.ExtensionContext, session: vscode.DebugSession) {
         super();
@@ -170,6 +173,7 @@ class DebugAdapter extends debugadapter.LoggingDebugSession {
 
         let target: Device = config.target;
 
+
         try {
             // Install the app if required
             if (config.apkPath) {
@@ -181,6 +185,7 @@ class DebugAdapter extends debugadapter.LoggingDebugSession {
             if (!config.packageName) {
                 throw new Error("A valid package name is required.");
             }
+
             this.consoleLog(`Launching the app activity ${config.packageName}/${config.launchActivity}`);
             await android.launchApp(target, config.packageName, config.launchActivity);
 
@@ -200,8 +205,19 @@ class DebugAdapter extends debugadapter.LoggingDebugSession {
                 this.consoleLog(`Attaching to process ${process.pid} (${process.name})`);
             }
 
+            // Start capture of logcat, if enabled
+            if(config.captureLogCat) {
+              this.consoleLog(`Starting logcat capture`);
+              this.logCat = await android.captureLogCat(parseInt(process.pid));
+            }
+
             // Attach to the process
             await this.attachToProcess(process.pid, response);
+
+            // Bring the logcat window to front
+            if(config.captureLogCat) {
+              highlightLogCat();
+            }
 
             // Resume process if applicable
             await this.resumeProcess(process.pid);
@@ -220,6 +236,13 @@ class DebugAdapter extends debugadapter.LoggingDebugSession {
         if (this.jdwpCleanup) {
             await this.jdwpCleanup();
             this.jdwpCleanup = undefined;
+        }
+
+        if(this.logCat !== null)
+        {
+          this.consoleLog(`Stopping logcat capture`);
+          this.logCat.stopCapture();
+          this.logCat = null;
         }
 
         this.consoleLog("Debugger detached");
